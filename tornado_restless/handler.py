@@ -19,11 +19,12 @@ from sqlalchemy import inspect as sqinspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm.exc import NoResultFound, UnmappedInstanceError, MultipleResultsFound
 from sqlalchemy.util import memoized_instancemethod, memoized_property
-from tornado.web import RequestHandler, HTTPError
+from tornado.web import RequestHandler, HTTPError, MissingArgumentError
 
 from .convert import to_dict, to_filter
 from .errors import IllegalArgumentError, MethodNotAllowedError, ProcessingException
 from .wrapper import SessionedModelWrapper
+import json
 
 
 __author__ = 'Martin Martimeo <martin@martimeo.de>'
@@ -709,6 +710,16 @@ class BaseHandler(RequestHandler):
 
         # To Dict
         return self.to_dict(instance)
+    
+    def _get_first_int_arg_matching(self, args, default):
+        for arg in args:
+            try:
+                val = int(self.get_argument(arg))
+                return val
+            except (MissingArgumentError, ValueError):
+                pass
+        return default
+        
 
     def get_many(self) -> dict:
         """
@@ -725,18 +736,21 @@ class BaseHandler(RequestHandler):
             :query limit: limit the count of modified instances
             :query single: If true sqlalchemy will raise an error if zero or more than one instances would be deleted
         """
+        per_page = self._get_first_int_arg_matching(('_perPage', 'results_per_page'), int(self.results_per_page))
+        
+        page = self._get_first_int_arg_matching(('_page', 'page'), int(self.results_per_page)) -1
 
+        offset = self._get_first_int_arg_matching(('offset', ), 0)
+        
         # All search params
         search_params = {'single': self.get_query_argument("single", False),
-                         'results_per_page': int(self.get_argument("results_per_page", self.results_per_page)),
-                         'offset': int(self.get_query_argument("offset", 0))}
+                         'results_per_page': per_page,
+                         'offset': offset}
 
         # Results per Page Check
         if search_params['results_per_page'] > self.max_results_per_page:
             raise IllegalArgumentError("request.results_per_page > application.max_results_per_page")
-
-        # Offset & Page
-        page = int(self.get_argument("page", '1')) - 1
+        
         search_params['offset'] += page * search_params['results_per_page']
         if search_params['offset'] < 0:
             raise IllegalArgumentError("request.offset < 0")
@@ -751,11 +765,11 @@ class BaseHandler(RequestHandler):
         self._call_preprocessor(filters=filters, search_params=search_params)
 
         # Num Results
-        num_results = self.model.count(filters=filters)
-        if search_params['results_per_page']:
-            total_pages = ceil(num_results / search_params['results_per_page'])
-        else:
-            total_pages = 1
+        #num_results = self.model.count(filters=filters)
+        #if search_params['results_per_page']:
+        #    total_pages = ceil(num_results / search_params['results_per_page'])
+        #else:
+        #    total_pages = 1
 
         # Get Instances
         if search_params['single']:
@@ -766,10 +780,13 @@ class BaseHandler(RequestHandler):
             instances = self.model.all(offset=search_params['offset'],
                                        limit=search_params['limit'],
                                        filters=filters)
-            return {'num_results': num_results,
-                    "total_pages": total_pages,
-                    "page": page + 1,
-                    "objects": self.to_dict(instances)}
+            #from pprint import pprint
+            #pprint(self.to_dict(instances))
+            return json.dumps(self.to_dict(instances))
+            #return {'num_results': num_results,
+            #        "total_pages": total_pages,
+            #        "page": page + 1,
+            #        "objects": self.to_dict(instances)}
 
     def _call_preprocessor(self, *args, **kwargs):
         """
