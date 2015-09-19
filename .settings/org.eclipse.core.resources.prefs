@@ -1,4 +1,5 @@
 eclipse.preferences.version=1
+encoding//tests/base.py=utf-8
 encoding//tornado_restless/api.py=utf-8
 encoding//tornado_restless/convert.py=utf-8
 encoding//tornado_restless/handler.py=utf-8

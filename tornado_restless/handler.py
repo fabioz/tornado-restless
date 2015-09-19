@@ -19,7 +19,7 @@ from sqlalchemy import inspect as sqinspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm.exc import NoResultFound, UnmappedInstanceError, MultipleResultsFound
 from sqlalchemy.util import memoized_instancemethod, memoized_property
-from tornado.web import RequestHandler, HTTPError, MissingArgumentError
+from tornado.web import RequestHandler, HTTPError, MissingArgumentError, Finish
 
 from .convert import to_dict, to_filter
 from .errors import IllegalArgumentError, MethodNotAllowedError, ProcessingException
@@ -44,7 +44,7 @@ class BaseHandler(RequestHandler):
 
         If you just want to customize the handling of the methods overwrite method_single or method_many.
 
-        If you want completly disable a method overwrite the SUPPORTED_METHODS constant
+        If you want completely disable a method overwrite the SUPPORTED_METHODS constant
     """
 
     ID_SEPARATOR = ","
@@ -115,6 +115,7 @@ class BaseHandler(RequestHandler):
         """
             Prepare the request
         """
+        self.model.session.expunge_all() # Always start a request fresh.
         self._call_preprocessor()
 
     def on_finish(self):
@@ -284,11 +285,21 @@ class BaseHandler(RequestHandler):
             num = self.model.update(values, limit=limit, filters=filters)
 
         # Commit
-        self.model.session.commit()
+        try:
+            self.model.session.commit()
+        except SQLAlchemyError as ex:
+            return self.on_sql_error(ex)
 
         # Result
         self.set_status(201, "Patched")
         return {'num_modified': num}
+    
+    def on_sql_error(self, ex):
+        logging.exception(ex)
+        self.model.session.rollback()
+        self.send_error(status_code=400, exc_info=sys.exc_info())
+        raise Finish()
+
 
     def patch_single(self, instance_id: list) -> dict:
         """
@@ -317,12 +328,9 @@ class BaseHandler(RequestHandler):
 
                 # Flush
                 try:
-                    self.model.session.flush()
+                    self.model.session.commit()
                 except SQLAlchemyError as ex:
-                    logging.exception(ex)
-                    self.model.session.rollback()
-                    self.send_error(status_code=400, exc_info=sys.exc_info())
-                    return
+                    return self.on_sql_error(ex)
 
                 # Refresh
                 self.model.session.refresh(instance)
@@ -333,11 +341,7 @@ class BaseHandler(RequestHandler):
                 # To Dict
                 return self.to_dict(instance)
         except SQLAlchemyError as ex:
-            logging.exception(ex)
-            self.send_error(status_code=400, exc_info=sys.exc_info())
-        finally:
-            # Commit
-            self.model.session.commit()
+            return self.on_sql_error(ex)
 
     def delete(self, instance_id: str=None):
         """
@@ -393,13 +397,15 @@ class BaseHandler(RequestHandler):
         if self.get_query_argument("single", False):
             instance = self.model.one(filters=filters)
             self.model.session.delete(instance)
-            self.model.session.commit()
             num = 1
         else:
             num = self.model.delete(limit=limit, filters=filters)
 
         # Commit
-        self.model.session.commit()
+        try:
+            self.model.session.commit()
+        except SQLAlchemyError as ex:
+            return self.on_sql_error(ex)
 
         # Result
         self.set_status(200, "Removed")
@@ -415,15 +421,18 @@ class BaseHandler(RequestHandler):
             :statuscode 204: instance successfull removed
         """
 
-        # Call Preprocessor
-        self._call_preprocessor(instance_id=instance_id)
-
-        # Get Instance
-        instance = self.model.get(*instance_id)
-
-        # Trigger deletion
-        self.model.session.delete(instance)
-        self.model.session.commit()
+        try:
+            # Call Preprocessor
+            self._call_preprocessor(instance_id=instance_id)
+    
+            # Get Instance
+            instance = self.model.get(*instance_id)
+    
+            # Trigger deletion
+            self.model.session.delete(instance)
+            self.model.session.commit()
+        except SQLAlchemyError as ex:
+            return self.on_sql_error(ex)
 
         # Status
         self.set_status(204, "Instance removed")
@@ -500,20 +509,13 @@ class BaseHandler(RequestHandler):
             # Flush
             self.model.session.commit()
 
-            # Refresh
-            self.model.session.refresh(instance)
-
             # Set Status
             self.set_status(201, "Created")
 
             # To Dict
             return self.to_dict(instance)
-        except SQLAlchemyError:
-            self.send_error(status_code=400, exc_info=sys.exc_info())
-            self.model.session.rollback()
-        finally:
-            # Commit
-            self.model.session.commit()
+        except SQLAlchemyError as ex:
+            return self.on_sql_error(ex)
 
     @memoized_instancemethod
     def get_content_encoding(self) -> str:
