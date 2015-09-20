@@ -115,6 +115,7 @@ class BaseHandler(RequestHandler):
         """
             Prepare the request
         """
+        RequestHandler.prepare(self)
         self.model.session.expunge_all() # Always start a request fresh.
         self._call_preprocessor()
 
@@ -312,34 +313,30 @@ class BaseHandler(RequestHandler):
             :statuscode 404: Error
         """
         try:
-            with self.model.session.begin_nested():
-                values = self.get_argument_values()
+            values = self.get_argument_values()
 
-                # Call Preprocessor
-                self._call_preprocessor(instance_id=instance_id, data=values)
+            # Call Preprocessor
+            self._call_preprocessor(instance_id=instance_id, data=values)
 
-                # Get Instance
-                instance = self.model.get(*instance_id)
+            # Get Instance
+            instance = self.model.get(*instance_id)
 
-                # Set Values
-                for (key, value) in values.items():
-                    self.logger.debug("%r.%s => %s" % (instance, key, value))
-                    setattr(instance, key, value)
+            # Set Values
+            for (key, value) in values.items():
+                self.logger.debug("%r.%s => %s" % (instance, key, value))
+                setattr(instance, key, value)
 
-                # Flush
-                try:
-                    self.model.session.commit()
-                except SQLAlchemyError as ex:
-                    return self.on_sql_error(ex)
+            # Flush
+            try:
+                self.model.session.commit()
+            except SQLAlchemyError as ex:
+                return self.on_sql_error(ex)
 
-                # Refresh
-                self.model.session.refresh(instance)
+            # Set Status
+            self.set_status(201, "Patched")
 
-                # Set Status
-                self.set_status(201, "Patched")
-
-                # To Dict
-                return self.to_dict(instance)
+            # To Dict
+            return self.to_dict(instance)
         except SQLAlchemyError as ex:
             return self.on_sql_error(ex)
 
