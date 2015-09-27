@@ -11,20 +11,20 @@ from json import loads
 import logging
 from math import ceil
 from traceback import print_exception
-from urllib.parse import parse_qs
 import sys
 import itertools
 
 from sqlalchemy import inspect as sqinspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm.exc import NoResultFound, UnmappedInstanceError, MultipleResultsFound
-from sqlalchemy.util import memoized_instancemethod, memoized_property
+from sqlalchemy.util import memoized_property
 from tornado.web import RequestHandler, HTTPError, MissingArgumentError, Finish
 
 from .convert import to_dict, to_filter
 from .errors import IllegalArgumentError, MethodNotAllowedError, ProcessingException
 from .wrapper import SessionedModelWrapper
 import json
+from tornado_restless import handler_utils
 
 
 __author__ = 'Martin Martimeo <martin@martimeo.de>'
@@ -514,21 +514,14 @@ class BaseHandler(RequestHandler):
         except SQLAlchemyError as ex:
             return self.on_sql_error(ex)
 
-    @memoized_instancemethod
     def get_content_encoding(self) -> str:
         """
         Get the encoding the client sends us for encoding request.body correctly
 
         :reqheader Content-Type: Provide a charset in addition for decoding arguments.
         """
+        return handler_utils.get_content_encoding(self)
 
-        content_type_args = {k.strip(): v for k, v in parse_qs(self.request.headers['Content-Type']).items()}
-        if 'charset' in content_type_args and content_type_args['charset']:
-            return content_type_args['charset'][0]
-        else:
-            return 'latin1'
-
-    @memoized_instancemethod
     def get_body_arguments(self) -> dict:
         """
             Get arguments encode as json body
@@ -537,24 +530,7 @@ class BaseHandler(RequestHandler):
 
             :reqheader Content-Type: application/x-www-form-urlencoded or application/json
         """
-
-        self.logger.debug(self.request.body)
-
-        content_type = self.request.headers.get('Content-Type')
-        if 'www-form-urlencoded' in content_type:
-            payload = self.request.arguments
-            for key, value in payload.items():
-                if len(value) == 0:
-                    payload[key] = None
-                elif len(value) == 1:
-                    payload[key] = str(value[0], encoding=self.get_content_encoding())
-                else:
-                    payload[key] = [str(value, encoding=self.get_content_encoding()) for value in value]
-            return payload
-        elif 'application/json' in content_type:
-            return loads(str(self.request.body, encoding=self.get_content_encoding()))
-        else:
-            raise HTTPError(415, content_type=content_type)
+        return handler_utils.get_body_arguments(self)
 
     def get_body_argument(self, name: str, default=RequestHandler._ARG_DEFAULT):
         """
