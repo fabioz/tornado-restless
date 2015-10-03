@@ -6,7 +6,7 @@ from tornado.web import HTTPError
 
 
 @memoized_instancemethod
-def get_content_encoding(handler) -> str:
+def get_content_encoding(handler, default='utf-8') -> str:
     """
     Get the encoding the client sends us for encoding request.body correctly
 
@@ -17,7 +17,7 @@ def get_content_encoding(handler) -> str:
     if 'charset' in content_type_args and content_type_args['charset']:
         return content_type_args['charset'][0]
     else:
-        return 'latin1'
+        return default
     
 @memoized_instancemethod
 def get_body_arguments(handler) -> dict:
