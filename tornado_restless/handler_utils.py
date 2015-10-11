@@ -30,6 +30,9 @@ def get_body_arguments(handler) -> dict:
     """
 
     content_type = handler.request.headers.get('Content-Type')
+    if content_type is None:
+        return {}
+    
     if 'www-form-urlencoded' in content_type:
         payload = handler.request.arguments
         for key, value in payload.items():
