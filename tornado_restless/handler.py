@@ -708,7 +708,6 @@ class BaseHandler(RequestHandler):
             :query results_per_page: Overwrite the returned results_per_page
             :query offset: Skip offset instances
             :query page: Return nth page
-            :query limit: limit the count of modified instances
             :query single: If true sqlalchemy will raise an error if zero or more than one instances would be deleted
         """
         per_page = self._get_first_int_arg_matching(('_perPage', 'results_per_page'), int(self.results_per_page))
@@ -731,7 +730,7 @@ class BaseHandler(RequestHandler):
             raise IllegalArgumentError("request.offset < 0")
 
         # Limit
-        search_params['limit'] = self.get_query_argument("limit", search_params['results_per_page'] or None)
+        search_params['limit'] = search_params['results_per_page']
 
         # Filters
         filters = self.get_filters()
@@ -740,7 +739,8 @@ class BaseHandler(RequestHandler):
         self._call_preprocessor(filters=filters, search_params=search_params)
 
         # Num Results
-        #num_results = self.model.count(filters=filters)
+        num_results = self.model.count(filters=filters)
+        self.set_header('X-Total-Count', num_results)
         #if search_params['results_per_page']:
         #    total_pages = ceil(num_results / search_params['results_per_page'])
         #else:
