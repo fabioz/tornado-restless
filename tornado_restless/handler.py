@@ -18,14 +18,14 @@ from sqlalchemy import inspect as sqinspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm.exc import NoResultFound, UnmappedInstanceError, MultipleResultsFound
 from sqlalchemy.util import memoized_property
-from tornado.web import RequestHandler, HTTPError, MissingArgumentError, Finish
+from tornado.web import RequestHandler, HTTPError, MissingArgumentError, Finish, \
+    _ARG_DEFAULT
 
 from .convert import to_dict, to_filter
 from .errors import IllegalArgumentError, MethodNotAllowedError, ProcessingException
 from .wrapper import SessionedModelWrapper
 import json
 from tornado_restless import handler_utils
-
 
 __author__ = 'Martin Martimeo <martin@martimeo.de>'
 __date__ = '26.04.13 - 22:09'
@@ -116,7 +116,7 @@ class BaseHandler(RequestHandler):
             Prepare the request
         """
         RequestHandler.prepare(self)
-        self.model.session.expunge_all() # Always start a request fresh.
+        self.model.session.expunge_all()  # Always start a request fresh.
         self._call_preprocessor()
 
     def on_finish(self):
@@ -294,13 +294,12 @@ class BaseHandler(RequestHandler):
         # Result
         self.set_status(201, "Patched")
         return {'num_modified': num}
-    
+
     def on_sql_error(self, ex):
         logging.exception(ex)
         self.model.session.rollback()
         self.send_error(status_code=400, exc_info=sys.exc_info())
         raise Finish()
-
 
     def patch_single(self, instance_id: list) -> dict:
         """
@@ -421,10 +420,10 @@ class BaseHandler(RequestHandler):
         try:
             # Call Preprocessor
             self._call_preprocessor(instance_id=instance_id)
-    
+
             # Get Instance
             instance = self.model.get(*instance_id)
-    
+
             # Trigger deletion
             self.model.session.delete(instance)
             self.model.session.commit()
@@ -532,7 +531,7 @@ class BaseHandler(RequestHandler):
         """
         return handler_utils.get_body_arguments(self)
 
-    def get_body_argument(self, name: str, default=RequestHandler._ARG_DEFAULT):
+    def get_body_argument(self, name: str, default=_ARG_DEFAULT):
         """
         Get an argument named key from json encoded body
 
@@ -545,7 +544,7 @@ class BaseHandler(RequestHandler):
         arguments = self.get_body_arguments()
         if name in arguments:
             return arguments[name]
-        elif default is RequestHandler._ARG_DEFAULT:
+        elif default is _ARG_DEFAULT:
             raise HTTPError(400, "Missing argument %s" % name)
         else:
             return default
@@ -561,7 +560,7 @@ class BaseHandler(RequestHandler):
             self._search_params = loads(self.get_argument("q", default="{}"))
             return self._search_params
 
-    def get_query_argument(self, name: str, default=RequestHandler._ARG_DEFAULT):
+    def get_query_argument(self, name: str, default=_ARG_DEFAULT):
         """
         Get an argument named key from json encoded body
 
@@ -575,7 +574,7 @@ class BaseHandler(RequestHandler):
 
         if name in self.search_params:
             return self.search_params[name]
-        elif default is RequestHandler._ARG_DEFAULT:
+        elif default is _ARG_DEFAULT:
             raise HTTPError(400, "Missing argument %s" % name)
         else:
             return default
@@ -639,7 +638,7 @@ class BaseHandler(RequestHandler):
                 del values[relation_key]
 
         # Check Columns
-        #for column in values:
+        # for column in values:
         #    if not column in self.model.column_names:
         #        raise IllegalArgumentError("Column '%s' not defined for model %s" % (column, self.model.model))
 
@@ -685,7 +684,7 @@ class BaseHandler(RequestHandler):
 
         # To Dict
         return self.to_dict(instance)
-    
+
     def _get_first_int_arg_matching(self, args, default):
         for arg in args:
             try:
@@ -694,7 +693,6 @@ class BaseHandler(RequestHandler):
             except (MissingArgumentError, ValueError):
                 pass
         return default
-        
 
     def get_many(self) -> dict:
         """
@@ -711,11 +709,11 @@ class BaseHandler(RequestHandler):
             :query single: If true sqlalchemy will raise an error if zero or more than one instances would be deleted
         """
         per_page = self._get_first_int_arg_matching(('_perPage', 'results_per_page'), int(self.results_per_page))
-        
-        page = self._get_first_int_arg_matching(('_page', 'page'), int(self.results_per_page)) -1
 
-        offset = self._get_first_int_arg_matching(('offset', ), 0)
-        
+        page = self._get_first_int_arg_matching(('_page', 'page'), 1) - 1
+
+        offset = self._get_first_int_arg_matching(('offset',), 0)
+
         # All search params
         search_params = {'single': self.get_query_argument("single", False),
                          'results_per_page': per_page,
@@ -724,7 +722,7 @@ class BaseHandler(RequestHandler):
         # Results per Page Check
         if search_params['results_per_page'] > self.max_results_per_page:
             raise IllegalArgumentError("request.results_per_page > application.max_results_per_page")
-        
+
         search_params['offset'] += page * search_params['results_per_page']
         if search_params['offset'] < 0:
             raise IllegalArgumentError("request.offset < 0")
@@ -741,9 +739,9 @@ class BaseHandler(RequestHandler):
         # Num Results
         num_results = self.model.count(filters=filters)
         self.set_header('X-Total-Count', num_results)
-        #if search_params['results_per_page']:
+        # if search_params['results_per_page']:
         #    total_pages = ceil(num_results / search_params['results_per_page'])
-        #else:
+        # else:
         #    total_pages = 1
 
         # Get Instances
@@ -755,10 +753,10 @@ class BaseHandler(RequestHandler):
             instances = self.model.all(offset=search_params['offset'],
                                        limit=search_params['limit'],
                                        filters=filters)
-            #from pprint import pprint
-            #pprint(self.to_dict(instances))
+            # from pprint import pprint
+            # pprint(self.to_dict(instances))
             return json.dumps(self.to_dict(instances))
-            #return {'num_results': num_results,
+            # return {'num_results': num_results,
             #        "total_pages": total_pages,
             #        "page": page + 1,
             #        "objects": self.to_dict(instances)}

@@ -121,11 +121,4 @@ class ApiManager(object):
         """
         blueprint = self.create_api_blueprint(model, *args, **kwargs)
 
-        for vhost, handlers in self.application.handlers:
-            if vhost == virtualhost:
-                handlers.append(blueprint)
-                break
-        else:
-            self.application.add_handlers(virtualhost, [blueprint])
-
-        self.application.named_handlers[blueprint.name] = blueprint
+        self.application.add_handlers(virtualhost, [blueprint])

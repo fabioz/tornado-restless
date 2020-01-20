@@ -1,30 +1,44 @@
 #!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 """
-    
+
 """
 from datetime import datetime
-from json import loads
 import logging
 from threading import Thread
 from urllib.parse import urljoin
 import os
 
-from flask import Flask
 import requests
-from sqlalchemy import create_engine, schema, event, Column, Integer, String, ForeignKey, DateTime, func, Float
+from sqlalchemy import create_engine, schema, Column, Integer, String, ForeignKey, DateTime, func, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import sessionmaker, relationship, scoped_session, backref
 import tornado.web
 import tornado.ioloop
-from flask.ext.restless import APIManager as FlaskRestlessManager
 
 from tornado_restless import ApiManager as TornadoRestlessManager
-
+import sys
+import pytest
+import asyncio
+import threading
 
 __author__ = 'Martin Martimeo <martin@martimeo.de>'
 __date__ = '21.08.13'
+
+import socket
+
+
+def get_free_port():
+    '''
+    Helper to get free port (usually not needed as the server can receive '0' to connect to a new
+    port).
+    '''
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('127.0.0.1', 0))
+    _, port = s.getsockname()
+    s.close()
+    return port
 
 
 class TestBase(object):
@@ -35,70 +49,63 @@ class TestBase(object):
     """
 
     config = {
-        'dns': 'sqlite:///test.lite',
+        'dns': 'sqlite:///:memory:',
         'encoding': 'utf-8',
-        'tornado': {'port': 7600}
     }
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def set_up(self):
+        if sys.platform == 'win32':
+            # See issues:
+            # https://github.com/tornadoweb/tornado/issues/2608
+            # https://bugs.python.org/issue37373
+            if sys.version_info[:3] != (3, 8, 1):
+                raise AssertionError('Check if this is still needed.')
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-        self.setUpAlchemy()
-        self.setUpModels()
-        self.setUpFlask()
-        self.setUpTornado()
-        self.setUpRestless()
-
-    def setUpFlask(self):
-        """
-            Create Flask application
-        """
-
-        app = Flask(__name__)
-        app.config['DEBUG'] = True
-        app.config['TESTING'] = True
-        app.config['SQLALCHEMY_DATABASE_URI'] = self.config['dns']
-
-        self.flask = app
-
-    def setUpTornado(self):
-        """
-            Create Tornado application
-        """
-        app = tornado.web.Application([])
-        app.listen(self.config['tornado']['port'])
-        self.tornado = app
-
-    def setUpRestless(self):
-        """
-            Create blueprints
-        """
-        Session = self.alchemy['Session']
-
-        self.api = {'tornado': TornadoRestlessManager(application=self.tornado, session_maker=Session),
-                    'flask': FlaskRestlessManager(self.flask, session=Session())}
-
-        for model, methods in self.models.values():
-            if methods == "all":
-                self.api['tornado'].create_api(model, methods=TornadoRestlessManager.METHODS_ALL)
-                self.api['flask'].create_api(model, methods=TornadoRestlessManager.METHODS_ALL)
-            else:
-                self.api['tornado'].create_api(model)
-                self.api['flask'].create_api(model)
+        event = threading.Event()
 
         class TornadoThread(Thread):
 
-            def run(self):
+            def run(s):  # @NoSelf
                 try:
-                    tornado.ioloop.IOLoop.instance().start()
-                finally:
-                    del self._target
+                    self._set_up_alchemy()
+                    self._set_up_models()
 
-        self.threads = {'tornado': TornadoThread(target=self),
-                        'flask': self.flask.test_client()}
+                    asyncio.set_event_loop(asyncio.new_event_loop())
+
+                    app = tornado.web.Application([])
+                    self.port = get_free_port()
+                    app.listen(self.port)
+                    self.tornado = app
+                    self.io_loop = tornado.ioloop.IOLoop.instance()
+
+                    Session = self.alchemy['Session']
+
+                    self.api = {'tornado': TornadoRestlessManager(application=self.tornado, session_maker=Session)}
+
+                    for model, methods in self.models.values():
+                        if methods == "all":
+                            self.api['tornado'].create_api(model, methods=TornadoRestlessManager.METHODS_ALL)
+                        else:
+                            self.api['tornado'].create_api(model)
+                finally:
+                    event.set()
+
+                self.io_loop.start()
+                self.tear_down_alchemy()
+
+        self.threads = {'tornado': TornadoThread(target=self, name='TornadoThread')}
         self.threads['tornado'].start()
+        event.wait()
+
+    @pytest.fixture(autouse=True)
+    def tear_down(self):
+        yield
+        self.tear_down_tornado()
 
     def curl_tornado(self, url, method='get', assert_for=200, **kwargs):
-        url = urljoin('http://localhost:%u' % self.config['tornado']['port'], url)
+        url = urljoin('http://localhost:%u' % self.port, url)
         r = getattr(requests, method)(url, **kwargs)
         if assert_for == 200:
             r.raise_for_status()
@@ -112,18 +119,7 @@ class TestBase(object):
         finally:
             r.close()
 
-    def curl_flask(self, url, method='get', assert_for=200, **kwargs):
-
-        # Map request parameter params to environ param query_string
-        if 'params' in kwargs:
-            kwargs['query_string'] = kwargs['params']
-            del kwargs['params']
-
-        r = getattr(self.threads['flask'], method)(url, **kwargs)
-        assert assert_for == r.status_code
-        return loads(r.data.decode(self.config['encoding']))
-
-    def setUpAlchemy(self):
+    def _set_up_alchemy(self):
         """
             Init SQLAlchemy engine
         """
@@ -134,7 +130,16 @@ class TestBase(object):
 
         self.alchemy = {'Base': Base, 'Session': Session, 'engine': engine}
 
-    def setUpModels(self):
+    def tear_down_alchemy(self):
+        Base = self.alchemy['Base']
+        engine = self.alchemy['engine']
+
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+        del self.alchemy
+
+    def _set_up_models(self):
         """
             Create models
         """
@@ -198,7 +203,7 @@ class TestBase(object):
 
         self.models = {'Person': (Person, "all"), 'Computer': (Computer, "all"), 'City': (City, "read")}
 
-        frankfurt = City(_plz=60400 ,name="Frankfurt")
+        frankfurt = City(_plz=60400, name="Frankfurt")
         berlin = City(_plz=10800, name="Berlin")
 
         self.citites = [frankfurt, berlin]
@@ -232,67 +237,13 @@ class TestBase(object):
         session.add_all(self.assocs)
         session.commit()
 
-    def tearDown(self):
-
-        self.tearDownTornado()
-        self.tearDownAlchemy()
-
-    def tearDownAlchemy(self):
-
-        Base = self.alchemy['Base']
-        engine = self.alchemy['engine']
-
-        Base.metadata.drop_all(engine)
-
-        del self.alchemy
-
-        os.unlink('test.lite')
-
-    def tearDownTornado(self):
-
-        self.config['tornado']['port'] += 1
+    def tear_down_tornado(self):
 
         def stop():
             """
                 Stop the IOLoop
             """
-            tornado.ioloop.IOLoop.instance().stop()
+            self.io_loop.stop()
 
-        tornado.ioloop.IOLoop.instance().add_callback(stop)
+        self.io_loop.add_callback(stop)
         self.threads['tornado'].join()
-
-    def subsetOf(self, a, b):
-        """
-            Test wether a is an subset of b (or b an superset of a)
-        """
-
-        if type(a) != type(b):
-            logging.error("Type not equal of a,b")
-            return False
-
-        if isinstance(a, dict) or hasattr(a, "items"):
-            for (key, value) in a.items():
-                if not self.subsetOf(value, b[key]):
-                    return False
-            else:
-                return True
-
-        if isinstance(a, list) or hasattr(a, "__iter__"):
-            for element in a:
-                if element not in b:
-                    return False
-            else:
-                return True
-
-        return a == b
-
-
-if __name__ == "__main__":
-
-    logging.basicConfig(level=logging.DEBUG)
-    base = TestBase()
-    base.setUp()
-    try:
-        base.threads["tornado"].join()
-    except KeyboardInterrupt:
-        base.tearDown()

@@ -5,7 +5,7 @@
 """
 from datetime import datetime, date, time
 from decimal import Decimal
-import collections
+import collections.abc
 import itertools
 
 from sqlalchemy.orm import object_mapper
@@ -15,13 +15,12 @@ from sqlalchemy.orm.query import Query
 from .errors import IllegalArgumentError, DictConvertionError
 from .wrapper import ModelWrapper
 
-
 __author__ = 'Martin Martimeo <martin@martimeo.de>'
 __date__ = '23.05.13 - 17:41'
 
 __datetypes__ = (datetime, time, date)
 __basetypes__ = (str, int, bool, float)
-__clsztypes__ = (Decimal, )
+__clsztypes__ = (Decimal,)
 
 
 def to_filter(instance,
@@ -229,7 +228,7 @@ def to_dict(instance,
         return str(instance)
 
     # Include Columns given
-    if isinstance(include, collections.Iterable):
+    if isinstance(include, collections.abc.Iterable):
         rtn = {}
         for column in include:
             rtn[column] = to_dict(getattr(instance, column), **to_deep(include, exclude, column))
